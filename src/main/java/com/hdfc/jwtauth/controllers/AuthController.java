@@ -1,4 +1,5 @@
 package com.hdfc.jwtauth.controllers;
+import com.hdfc.jwtauth.services.UserService;
 import io.swagger.v3.oas.annotations.*;
 import com.hdfc.jwtauth.entity.User;
 import com.hdfc.jwtauth.exceptions.InvalidCredentialsException;
@@ -52,6 +53,7 @@ public class AuthController {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final UserService userService;
 
 
     public AuthController(
@@ -62,7 +64,8 @@ public class AuthController {
             TokenStore tokenStore,
             ExternalLoginService externalLoginService,
             UserRepository userRepository,
-            PasswordEncoder passwordEncoder
+            PasswordEncoder passwordEncoder,
+            UserService userService
     ) {
 
         this.loginRateLimiter = loginRateLimiter;
@@ -73,6 +76,7 @@ public class AuthController {
         this.externalLoginService = externalLoginService;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.userService=userService;
     }
 
 
@@ -102,79 +106,19 @@ public class AuthController {
     }
 
 
-    // ============================================================
-    // SIGNUP
-    // ============================================================
+
 
     @PostMapping("/signup")
     public ResponseEntity<?> signup(
             @Valid @RequestBody RegisterRequest request
     ) {
 
-        // --------------------------------
-        // Confirm password
-        // --------------------------------
-
-        if (!request.password()
-                .equals(request.confirmPassword())) {
-
-            return ResponseEntity
-                    .badRequest()
-                    .body(new ApiResponse(
-                            "Passwords do not match"
-                    ));
-        }
-
-
-        // --------------------------------
-        // Check username
-        // --------------------------------
-
-        if (userRepository.existsByUsername(
-                request.username())) {
-
-            return ResponseEntity
-                    .status(HttpStatus.CONFLICT)
-                    .body(new ApiResponse(
-                            "Username already exists"
-                    ));
-        }
-
-
-        // --------------------------------
-        // Hash password
-        // --------------------------------
-
-        String encodedPassword =
-                passwordEncoder.encode(
-                        request.password()
-                );
-
-
-        // --------------------------------
-        // Create USER account
-        // --------------------------------
-
-        User user = new User(
-                request.username(),
-                encodedPassword,
-                "USER",
-                true
-        );
-
-
-        // --------------------------------
-        // Save to PostgreSQL
-        // --------------------------------
-
-        userRepository.save(user);
-
+        userService.register(request);
 
         log.info(
                 "SIGNUP_SUCCESS username={}",
                 request.username()
         );
-
 
         return ResponseEntity
                 .status(HttpStatus.CREATED)
@@ -182,12 +126,6 @@ public class AuthController {
                         "Account created successfully"
                 ));
     }
-
-
-    // ============================================================
-    // LOGIN
-    // ============================================================
-
     @PostMapping("/login")
     @Operation(
             summary = "Authenticate user",
@@ -202,16 +140,10 @@ public class AuthController {
         String ip = httpRequest.getRemoteAddr();
 
 
-        // --------------------------------
-        // RESILIENCE4J RATE LIMIT CHECK
-        // --------------------------------
 
         loginRateLimiter.checkRateLimit(username, ip);
 
 
-        // --------------------------------
-        // ACCOUNT LOCK CHECK
-        // --------------------------------
 
         if (loginAttemptService.isLocked(username)) {
 
@@ -228,18 +160,13 @@ public class AuthController {
                     ));
         }
 
-        // --------------------------------
-        // FIND USER FROM DATABASE
-        // --------------------------------
 
         User user = userRepository
                 .findByUsername(username)
                 .orElse(null);
 
 
-        // --------------------------------
-        // INVALID LOGIN
-        // --------------------------------
+
 
         try {
             externalLoginService.validateExternalLogin(
@@ -266,7 +193,7 @@ public class AuthController {
             );
 
 
-            // Account became locked
+
             if (loginAttemptService.isLocked(username)) {
 
                 log.warn(
@@ -291,9 +218,7 @@ public class AuthController {
         }
 
 
-        // --------------------------------
-        // ACCOUNT STATUS
-        // --------------------------------
+
 
         if (!user.isActive()) {
 
@@ -311,16 +236,11 @@ public class AuthController {
         }
 
 
-        // --------------------------------
-        // LOGIN SUCCESS
-        // --------------------------------
+
 
         loginAttemptService.loginSucceeded(username);
 
 
-        // --------------------------------
-        // GENERATE JWTs
-        // --------------------------------
 
         String accessToken =
                 jwtService.generateAccessToken(user);
@@ -329,9 +249,6 @@ public class AuthController {
                 jwtService.generateRefreshToken(user);
 
 
-        // --------------------------------
-        // STORE TOKENS IN MEMORY
-        // --------------------------------
 
         tokenStore.save(
                 accessToken,
@@ -344,9 +261,6 @@ public class AuthController {
         );
 
 
-        // --------------------------------
-        // CREATE COOKIES
-        // --------------------------------
 
         ResponseCookie accessCookie =
                 cookieService.createAccessTokenCookie(
@@ -368,9 +282,7 @@ public class AuthController {
         );
 
 
-        // --------------------------------
-        // RETURN RESPONSE
-        // --------------------------------
+
 
         return ResponseEntity
                 .ok()
@@ -390,9 +302,7 @@ public class AuthController {
     }
 
 
-    // ============================================================
-    // REFRESH TOKEN
-    // ============================================================
+
 
     @PostMapping("/refresh")
     public ResponseEntity<?> refresh(
@@ -406,9 +316,7 @@ public class AuthController {
                 );
 
 
-        // --------------------------------
-        // CHECK COOKIE
-        // --------------------------------
+
 
         if (refreshToken == null) {
 
@@ -422,9 +330,7 @@ public class AuthController {
 
         try {
 
-            // --------------------------------
-            // CHECK TOKEN STORE
-            // --------------------------------
+
 
             if (!tokenStore.isActive(refreshToken)) {
 
@@ -436,9 +342,6 @@ public class AuthController {
             }
 
 
-            // --------------------------------
-            // CHECK TOKEN TYPE
-            // --------------------------------
 
             if (!jwtService.isRefreshToken(
                     refreshToken
@@ -452,17 +355,12 @@ public class AuthController {
             }
 
 
-            // --------------------------------
-            // GET USERNAME
-            // --------------------------------
 
             String username =
                     jwtService.username(refreshToken);
 
 
-            // --------------------------------
-            // FIND USER FROM DATABASE
-            // --------------------------------
+
 
             User user = userRepository
                     .findByUsername(username)
@@ -479,10 +377,6 @@ public class AuthController {
             }
 
 
-            // --------------------------------
-            // CHECK ACCOUNT STATUS
-            // --------------------------------
-
             if (!user.isActive()) {
 
                 return ResponseEntity
@@ -493,16 +387,10 @@ public class AuthController {
             }
 
 
-            // --------------------------------
-            // ROTATE OLD REFRESH TOKEN
-            // --------------------------------
-
             tokenStore.remove(refreshToken);
 
 
-            // --------------------------------
-            // CREATE NEW TOKENS
-            // --------------------------------
+
 
             String newAccessToken =
                     jwtService.generateAccessToken(user);
@@ -511,9 +399,7 @@ public class AuthController {
                     jwtService.generateRefreshToken(user);
 
 
-            // --------------------------------
-            // STORE NEW TOKENS
-            // --------------------------------
+
 
             tokenStore.save(
                     newAccessToken,
@@ -526,9 +412,6 @@ public class AuthController {
             );
 
 
-            // --------------------------------
-            // CREATE NEW COOKIES
-            // --------------------------------
 
             ResponseCookie accessCookie =
                     cookieService.createAccessTokenCookie(
@@ -579,9 +462,6 @@ public class AuthController {
     }
 
 
-    // ============================================================
-    // CURRENT USER PROFILE
-    // ============================================================
 
     @GetMapping("/me")
     public ResponseEntity<?> getProfile(
@@ -631,9 +511,6 @@ public class AuthController {
     }
 
 
-    // ============================================================
-    // AUTH CHECK
-    // ============================================================
 
     @GetMapping("/auth")
     public ResponseEntity<?> auth(
@@ -661,18 +538,11 @@ public class AuthController {
     }
 
 
-    // ============================================================
-    // LOGOUT
-    // ============================================================
-
     @PostMapping("/logout")
     public ResponseEntity<?> logout(
             HttpServletRequest request
     ) {
 
-        // --------------------------------
-        // ACCESS TOKEN
-        // --------------------------------
 
         String accessToken =
                 extractCookie(
@@ -681,9 +551,6 @@ public class AuthController {
                 );
 
 
-        // --------------------------------
-        // REFRESH TOKEN
-        // --------------------------------
 
         String refreshToken =
                 extractCookie(
@@ -692,9 +559,6 @@ public class AuthController {
                 );
 
 
-        // --------------------------------
-        // REVOKE ACCESS TOKEN
-        // --------------------------------
 
         if (accessToken != null) {
 
@@ -702,19 +566,12 @@ public class AuthController {
         }
 
 
-        // --------------------------------
-        // REVOKE REFRESH TOKEN
-        // --------------------------------
-
         if (refreshToken != null) {
 
             tokenStore.remove(refreshToken);
         }
 
 
-        // --------------------------------
-        // CLEAR COOKIES
-        // --------------------------------
 
         ResponseCookie clearAccessCookie =
                 cookieService.clearAccessTokenCookie();

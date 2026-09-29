@@ -49,6 +49,7 @@ login:
     minimum-number-of-calls: 5
     sliding-window-size: 10
 
+
 app:
   security:
     cookie:
